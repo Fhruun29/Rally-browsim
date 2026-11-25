@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rally Stage Sim</title>
+<style>:root{color-scheme:dark}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#0e1418;color:#eee}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style>
 </head>
 <body>
 <meta charset="utf-8">
@@ -113,11 +114,14 @@ html.fsmode, html.fsmode body { overflow: hidden; }
 #hudBtns button { font-size: 13px; padding: 5px 10px; background: rgba(14,20,24,.78); }
 .menumode #hudBtns { top: 10px; } .menumode #hudBtns .hb-play { display: none; }
 #replayBar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 21; display: flex; align-items: center; gap: 6px; background: rgba(14,20,24,.82); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; max-width: calc(100% - 28px); }
-#replayBar button { font-size: 13px; padding: 5px 9px; background: rgba(255,255,255,.08); }
+#hudBtns .hb-play.rp-off { }
+.replaymode #hudBtns .hb-play:not(#hbCam) { display: none; }
+html.rpmode .touch { display: none !important; }
+#replayBar button { font-size: 13px; min-width: 34px; padding: 5px 9px; background: rgba(255,255,255,.08); }
 #replayBar button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1a1405; }
 #replayBar input[type=range] { width: 180px; accent-color: var(--accent); }
 #replayBar span { font: 600 12px var(--body); color: var(--fg); font-variant-numeric: tabular-nums; min-width: 58px; text-align: center; }
-@media (max-width: 760px) { #replayBar input[type=range] { width: 90px; } #replayBar span { min-width: 46px; font-size: 11px; } #replayBar { gap: 4px; padding: 5px 7px; } }
+@media (max-width: 760px) { #replayBar { bottom: 112px; flex-wrap: wrap; justify-content: center; width: calc(100% - 20px); } #replayBar input[type=range] { flex: 1 1 100%; order: 5; width: 100%; } #replayBar span { min-width: 46px; font-size: 11px; } #replayBar { gap: 4px; padding: 5px 7px; } }
 #gset { position: absolute; inset: 0; z-index: 30; display: flex; pointer-events: none; background: rgba(6,9,12,.58); }
 #gset[hidden] { display: none; }
 #gset.clear { background: transparent; }
@@ -139,7 +143,7 @@ html.fsmode, html.fsmode body { overflow: hidden; }
 .gs-btns { display: flex; gap: 8px; margin: 10px 0 0; }
 .gs-keys { display: grid; gap: 4px; } .gs-k { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid rgba(38,51,59,.5); } .gs-k b { color: var(--fg); background: #202c34; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; margin-right: 4px; font-weight: 600; } .gs-k em { font-style: normal; color: var(--mute); }
 .gs-note { color: var(--mute); font-size: 13px; }
-@media (max-width: 640px) { .gs-card { flex-direction: column; } .gs-side { width: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px; } .gs-side h2 { display: none; } .gs-side #gsClose { margin: 0 0 0 auto; } .gs-row { grid-template-columns: 1fr; gap: 6px; } #hudBtns { flex-wrap: wrap; justify-content: flex-end; max-width: 70%; } }
+@media (max-width: 640px) { .gs-card { flex-direction: column; } .gs-side { width: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px; } .gs-side h2 { display: none; } .gs-side #gsClose { margin: 0 0 0 auto; } .gs-row { grid-template-columns: 1fr; gap: 6px; } #hudBtns { flex-wrap: wrap; justify-content: flex-end; max-width: 56%; top: 96px; } .menumode #hudBtns { top: 10px; max-width: 70%; } }
 
 /* ---- lesson banner, driver sign-in ---- */
 #lessonBar { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 15; display: flex; gap: 10px; align-items: center; background: rgba(14,20,24,.85); border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px; }
@@ -3243,7 +3247,7 @@ function replayStep(dt) {
   syncReplayUI();
 }
 function syncReplayUI() {
-  $('rpPlay').textContent = RP.playing ? '⏸' : '▶';
+  $('rpPlay').textContent = RP.playing ? '❚❚' : '▶';
   setPressed('rpRew', RP.dir < 0); setPressed('rpSlow', RP.speed === 0.3); setPressed('rpFast', RP.speed === 3);
 }
 function enterReplay() {
@@ -3361,7 +3365,7 @@ function setMode(m) {
   document.querySelector('.stagebox').classList.toggle('replaymode', m === 'replay');
   document.querySelector('.wrap').classList.toggle('inmenu', m === 'menu');
   if (m === 'menu') { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); ovl.hidden = true; }
-  $('replayBar').hidden = m !== 'replay';
+  $('replayBar').hidden = m !== 'replay'; document.documentElement.classList.toggle('rpmode', m === 'replay');
   resizeAll();
 }
 function openMenu(first) {
