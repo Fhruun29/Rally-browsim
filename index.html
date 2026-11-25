@@ -1,4 +1,11 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rally Stage Sim</title>
+</head>
+<body>
 <meta charset="utf-8">
 <title>Rally Stage Sim</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -295,6 +302,7 @@ html.fsmode, html.fsmode body { overflow: hidden; }
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 /* Rally vehicle physics: planar rigid body + sprung-mass weight transfer,
    per-wheel combined-slip tyres with relaxation, turbo engine, sequential box,
@@ -2557,6 +2565,102 @@ root.RallyCoDriver = C;
 })(typeof self !== 'undefined' ? self : this);
 
 ;
+/* ---------------- cloud account transport (GitHub / self-hosted build): Supabase Auth + Postgres ----------------
+   Fill in SUPABASE_CONFIG below with the values from YOUR OWN Supabase project:
+   Project Settings -> API -> "Project URL" and "anon public" key. Both are meant to be public/client-side —
+   that's normal for Supabase, security comes from Row Level Security (RLS) policies on the table, not from
+   hiding this key. See the setup steps that come with this file for the SQL to run first.
+   Until you fill this in, cloud sign-in shows a friendly "not set up" message and the game still works fine
+   with local, per-browser driver profiles (the "This browser" list on the sign-in screen).
+   Exposes window.CloudTransport = { init, createAccount, signIn, sync, signOut }, the same shape the
+   Artifact build's cloud.js exposes, so app.js doesn't need to know which backend is in use. */
+const SUPABASE_CONFIG = {
+  url: "https://ephahfybjqrrowuibwut.supabase.co",
+  anonKey: "sb_publishable_ejHlPhD_ZC55CBU2o9-HVw_qAGx-oAD"
+};
+
+window.CloudTransport = (function () {
+  let client = null, current = null, syncTimer = null;
+
+  function normUser(name) { return (name || '').trim().toLowerCase().replace(/[^a-z0-9_.\-]/g, ''); }
+  /* Supabase's email/password auth needs an email shape, so a username becomes a fake address —
+     this never sends mail anywhere (and email confirmation must be turned off in your project,
+     see the setup notes), it's just the id Supabase's own (real, server-side) auth uses. */
+  function fakeEmail(username) { return username + '@rally-driver.local'; }
+
+  async function init() {
+    try {
+      if (!SUPABASE_CONFIG.url || SUPABASE_CONFIG.url.indexOf('YOUR-PROJECT-REF') !== -1) return false;
+      if (!SUPABASE_CONFIG.anonKey || SUPABASE_CONFIG.anonKey.indexOf('PASTE_') === 0) return false;
+      if (typeof supabase === 'undefined') return false;
+      client = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+      return true;
+    } catch (e) { client = null; return false; }
+  }
+
+  async function createAccount(rawUser, pass, data) {
+    const username = normUser(rawUser);
+    if (!username || username.length < 3) return { ok: false, msg: 'Username must be at least 3 characters (letters, numbers, . _ -).' };
+    if (!pass || pass.length < 6) return { ok: false, msg: 'Password must be at least 6 characters.' };
+    if (!client) return { ok: false, msg: 'Cloud sign-in isn’t set up yet — see the SUPABASE_CONFIG note near the top of cloud-supabase.js, or use "This browser" below.' };
+    try {
+      const { data: sdata, error } = await client.auth.signUp({ email: fakeEmail(username), password: pass });
+      if (error) {
+        let msg = 'Could not create an account — try again.';
+        if (/already|registered|exists/i.test(error.message || '')) msg = 'That username is already taken.';
+        else if (/network|fetch/i.test(error.message || '')) msg = 'No connection to the cloud — check your internet and try again.';
+        return { ok: false, msg };
+      }
+      if (!sdata.session) {
+        return { ok: false, msg: 'Account created, but sign-in is blocked — turn off "Confirm email" for this project in Supabase (Authentication → Providers → Email), then try signing in.' };
+      }
+      const uid = sdata.user.id;
+      const { error: upErr } = await client.from('profiles').upsert({ id: uid, username, data, updated_at: new Date().toISOString() });
+      if (upErr) return { ok: false, msg: 'Account created, but saving your data failed — check the profiles table and RLS policies, then try signing in again.' };
+      current = { uid, username };
+      return { ok: true, username, data };
+    } catch (e) {
+      return { ok: false, msg: 'Could not create an account — try again.' };
+    }
+  }
+
+  async function signIn(rawUser, pass) {
+    const username = normUser(rawUser);
+    if (!username || !pass) return { ok: false, msg: 'Enter a username and password.' };
+    if (!client) return { ok: false, msg: 'Cloud sign-in isn’t set up yet — see the SUPABASE_CONFIG note near the top of cloud-supabase.js, or use "This browser" below.' };
+    try {
+      const { data: sdata, error } = await client.auth.signInWithPassword({ email: fakeEmail(username), password: pass });
+      if (error) {
+        let msg = 'Wrong username or password.';
+        if (/network|fetch/i.test(error.message || '')) msg = 'No connection to the cloud — check your internet and try again.';
+        return { ok: false, msg };
+      }
+      const uid = sdata.user.id;
+      const { data: row } = await client.from('profiles').select('data').eq('id', uid).single();
+      current = { uid, username };
+      return { ok: true, username, data: row ? row.data : null };
+    } catch (e) {
+      return { ok: false, msg: 'Could not sign in — try again.' };
+    }
+  }
+
+  function sync(data) {
+    if (!current || !client) return;
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(async () => {
+      try { await client.from('profiles').upsert({ id: current.uid, username: current.username, data, updated_at: new Date().toISOString() }); } catch (e) {}
+    }, 1200);
+  }
+
+  function signOut() {
+    if (client) { try { client.auth.signOut(); } catch (e) {} }
+    current = null; clearTimeout(syncTimer);
+  }
+
+  return { init, createAccount, signIn, sync, signOut };
+})();
+
+;
 (function () {
 'use strict';
 const P = RallyPhysics, ST = RallyStage, GL = RallyGL, SND = RallySound, CO = RallyCoDriver, NOTES = RallyNotes;
@@ -3495,7 +3599,7 @@ function renderLogin() {
   }));
 }
 function setActiveProfile(p) {
-  if (!p.cloud) cloudUser = null;
+  if (!p.cloud) { cloudUser = null; if (window.CloudTransport) window.CloudTransport.signOut(); }
   activeProfile = p;
   try { localStorage.setItem('rally-active-profile', p.id); } catch (e) {}
   const w = $('menuWelcome'); if (w) w.textContent = p.name + ' · Service park';
@@ -3520,22 +3624,8 @@ function initLogin() {
   openLogin();
 }
 
-/* ---------------- cloud accounts: username + password, synced via the db capability ---------------- */
-let cloudDB = null, cloudUser = null, cloudSyncTimer = null;
-const CLOUD_DEBOUNCE_MS = 1200;
-function normUser(name) { return (name || '').trim().toLowerCase().replace(/[^a-z0-9_.\-]/g, ''); }
-function b2h(buf) { return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''); }
-function h2b(hex) { const a = new Uint8Array(hex.length / 2); for (let i = 0; i < a.length; i++) a[i] = parseInt(hex.substr(i * 2, 2), 16); return a; }
-function newSalt() { return b2h(crypto.getRandomValues(new Uint8Array(16))); }
-async function hashPass(password, saltHex) {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: h2b(saltHex), iterations: 100000, hash: 'SHA-256' }, key, 256);
-  return b2h(bits);
-}
-async function initCloud() {
-  try { cloudDB = (typeof claude !== 'undefined' && claude.use) ? await claude.use('db') : null; } catch (e) { cloudDB = null; }
-}
+/* ---------------- cloud accounts: thin wiring over window.CloudTransport (see cloud.js / cloud-firebase.js) ---------------- */
+let cloudUser = null;
 function setLoginMsg(text, kind) {
   const m = $('loginMsg'); if (!m) return;
   m.textContent = text || ''; m.hidden = !text;
@@ -3543,6 +3633,7 @@ function setLoginMsg(text, kind) {
 }
 function setLoginBusy(busy) { [$('loginSignIn'), $('loginCreate')].forEach(b => { if (b) b.disabled = !!busy; }); }
 function cloudSnapshot() { return { prefs: JSON.parse(JSON.stringify(prefs)), school: JSON.parse(JSON.stringify(schoolProgress)) }; }
+function savePrefsLocal() { try { localStorage.setItem('rally-prefs', JSON.stringify(prefs)); } catch (e) {} }
 function applyCloudData(data) {
   if (!data) return;
   if (data.prefs) {
@@ -3557,57 +3648,29 @@ function applyCloudData(data) {
     if (mode === 'menu' && menuTab === 'school') renderSchoolList();
   }
 }
-function savePrefsLocal() { try { localStorage.setItem('rally-prefs', JSON.stringify(prefs)); } catch (e) {} }
-function queueCloudSync() {
-  if (!cloudUser || !cloudDB) return;
-  clearTimeout(cloudSyncTimer);
-  cloudSyncTimer = setTimeout(doCloudSync, CLOUD_DEBOUNCE_MS);
-}
-async function doCloudSync() {
-  if (!cloudUser || !cloudDB) return;
-  try { await cloudDB.doc('accounts/' + cloudUser.username).update({ data: cloudSnapshot(), updatedAt: Date.now() }); } catch (e) {}
-}
-function finishCloudSignIn(username, data) {
-  cloudUser = { username };
-  setActiveProfile({ id: 'cloud:' + username, name: username, cloud: true });
-  applyCloudData(data);
-  setLoginMsg('Signed in as ' + username + '.', 'ok');
-}
+async function initCloud() { if (window.CloudTransport) { try { await window.CloudTransport.init(); } catch (e) {} } }
+function queueCloudSync() { if (cloudUser && window.CloudTransport) window.CloudTransport.sync(cloudSnapshot()); }
 async function cloudCreateAccount(rawUser, pass) {
-  const username = normUser(rawUser);
-  if (!username || username.length < 3) { setLoginMsg('Username must be at least 3 characters (letters, numbers, . _ -).', 'err'); return; }
-  if (!pass || pass.length < 4) { setLoginMsg('Password must be at least 4 characters.', 'err'); return; }
-  if (!cloudDB) { setLoginMsg('Cloud sign-in isn’t available right now — use "This browser" below instead.', 'err'); return; }
+  if (!window.CloudTransport) { setLoginMsg('Cloud sign-in isn’t available right now — use "This browser" below instead.', 'err'); return; }
   setLoginBusy(true); setLoginMsg('Creating account…');
-  try {
-    const ref = cloudDB.doc('accounts/' + username);
-    const existing = await ref.get();
-    if (existing.exists) { setLoginMsg('That username is already taken.', 'err'); setLoginBusy(false); return; }
-    const salt = newSalt(), hash = await hashPass(pass, salt), data = cloudSnapshot();
-    await ref.set({ username, salt, hash, createdAt: Date.now(), updatedAt: Date.now(), data });
-    finishCloudSignIn(username, data);
-  } catch (e) {
-    setLoginMsg(e && e.code === 'not_granted' ? 'You need edit access to this page to create a cloud account.' : 'Could not create an account — try again.', 'err');
-  }
+  const r = await window.CloudTransport.createAccount(rawUser, pass, cloudSnapshot());
   setLoginBusy(false);
+  if (!r.ok) { setLoginMsg(r.msg, 'err'); return; }
+  cloudUser = { username: r.username };
+  setActiveProfile({ id: 'cloud:' + r.username, name: r.username, cloud: true });
+  applyCloudData(r.data);
+  setLoginMsg('Signed in as ' + r.username + '.', 'ok');
 }
 async function cloudSignIn(rawUser, pass) {
-  const username = normUser(rawUser);
-  if (!username || !pass) { setLoginMsg('Enter a username and password.', 'err'); return; }
-  if (!cloudDB) { setLoginMsg('Cloud sign-in isn’t available right now — use "This browser" below instead.', 'err'); return; }
+  if (!window.CloudTransport) { setLoginMsg('Cloud sign-in isn’t available right now — use "This browser" below instead.', 'err'); return; }
   setLoginBusy(true); setLoginMsg('Signing in…');
-  try {
-    const ref = cloudDB.doc('accounts/' + username);
-    const snap = await ref.get();
-    if (!snap.exists) { setLoginMsg('No account with that username.', 'err'); setLoginBusy(false); return; }
-    const rec = snap.data();
-    const hash = await hashPass(pass, rec.salt);
-    if (hash !== rec.hash) { setLoginMsg('Wrong password.', 'err'); setLoginBusy(false); return; }
-    finishCloudSignIn(username, rec.data);
-  } catch (e) {
-    setLoginMsg('Could not sign in — try again.', 'err');
-  }
+  const r = await window.CloudTransport.signIn(rawUser, pass);
   setLoginBusy(false);
+  if (!r.ok) { setLoginMsg(r.msg, 'err'); return; }
+  cloudUser = { username: r.username };
+  setActiveProfile({ id: 'cloud:' + r.username, name: r.username, cloud: true });
+  applyCloudData(r.data);
+  setLoginMsg('Signed in as ' + r.username + '.', 'ok');
 }
 
 /* ---------------- rally school: short, focused driving lessons ---------------- */
@@ -3751,5 +3814,5 @@ window.__rally = { car, sim, get stage() { return stage; }, tick, render, drawTe
 })();
 
 </script>
-
-</body></html>
+</body>
+</html>
