@@ -2226,6 +2226,7 @@ function updateCamera(car, dt, o) {
   const cx = car.x, cz = -car.y, gz = car.zc - 0.46 + (car.landKick || 0) * 0.0;
   curZ += (gz - curZ) * (1 - Math.exp(-dt * (car.grounded ? 14 : 4))); const zb = curZ;
   let e, t;
+  if (mode !== 4) cam.free = null;
   if (mode === 3 && COCK.ready) {
     const bm = bodyMatrix(car).bodyM;
     cam.sway = (cam.sway || 0) + (clamp(car.ay, -1.6, 1.6) * 0.03 - (cam.sway || 0)) * (1 - Math.exp(-dt * 6));
@@ -2244,16 +2245,16 @@ function updateCamera(car, dt, o) {
     e = [cx - f[0] * 13 + sx, zb + 30 + sy, cz - f[2] * 13]; t = [cx + f[0] * 9, zb, cz + f[2] * 9];
     fov += ((a ? a.fov : 52) * D2R - fov) * Math.min(1, dt * 4);
   } else if (mode === 4) {
-    /* free-floating spectator cam: WASD/E/Q fly it around, it always looks back at the car */
+    /* free-flying spectator cam: WASD/E/Q fly it, arrow keys turn the view. It starts behind the car and restarts there each time you switch to it. */
     const f0 = [Math.cos(cam.psi), 0, -Math.sin(cam.psi)];
-    if (!cam.free) cam.free = { x: cx - f0[0] * 14, y: zb + 7, z: cz - f0[2] * 14 };
-    const fm = o.freeMove || { fwd: 0, strafe: 0, up: 0 }, spdv = o.freeSpeed || 16;
-    const dx = cx - cam.free.x, dz = cz - cam.free.z, hl = Math.hypot(dx, dz) || 1;
-    const fx = dx / hl, fz = dz / hl, rx = -fz, rz = fx;
-    cam.free.x += (fx * fm.fwd + rx * fm.strafe) * spdv * dt;
-    cam.free.z += (fz * fm.fwd + rz * fm.strafe) * spdv * dt;
-    cam.free.y += fm.up * spdv * dt;
-    e = [cam.free.x, cam.free.y, cam.free.z]; t = [cx, zb + 0.9, cz];
+    if (!cam.free) cam.free = { x: cx - f0[0] * 14, y: zb + 7, z: cz - f0[2] * 14, yaw: cam.psi, pitch: Math.atan2(-6.1, 14) };
+    const F = cam.free, fm = o.freeMove || { fwd: 0, strafe: 0, up: 0, yaw: 0, pitch: 0 }, spdv = o.freeSpeed || 16;
+    F.yaw += (fm.yaw || 0) * 1.5 * dt; F.pitch = clamp(F.pitch + (fm.pitch || 0) * 1.1 * dt, -1.45, 1.45);
+    const cp = Math.cos(F.pitch), fx = Math.cos(F.yaw), fz = -Math.sin(F.yaw), rx = -fz, rz = fx;
+    F.x += (fx * cp * fm.fwd + rx * fm.strafe) * spdv * dt;
+    F.z += (fz * cp * fm.fwd + rz * fm.strafe) * spdv * dt;
+    F.y += (Math.sin(F.pitch) * fm.fwd + fm.up) * spdv * dt;
+    e = [F.x, F.y, F.z]; t = [F.x + fx * cp, F.y + Math.sin(F.pitch), F.z + fz * cp];
     fov += ((a ? a.fov : 62) * D2R - fov) * Math.min(1, dt * 4);
   } else if (mode === 5) {
     /* rigidly mounted beside the front-right wheel, pulled clear of the bodywork, eyeing the arch */
@@ -2791,9 +2792,9 @@ function readInput() {
   let thr = 0, brk = 0, steer = 0, hb = false, analog = false;
   const k = keys;
   const free = view.cam === FREECAM;    // WASD drives the free camera instead of the car while it's active
-  if (k.ArrowUp || (!free && k.KeyW) || touch.gas) thr = 1;
-  if (k.ArrowDown || (!free && k.KeyS) || touch.brk) brk = 1;
-  steer = ((k.ArrowLeft || (!free && k.KeyA) || touch.l) ? 1 : 0) - ((k.ArrowRight || (!free && k.KeyD) || touch.r) ? 1 : 0);
+  if ((!free && (k.ArrowUp || k.KeyW)) || touch.gas) thr = 1;
+  if ((!free && (k.ArrowDown || k.KeyS)) || touch.brk) brk = 1;
+  steer = ((!free && (k.ArrowLeft || k.KeyA)) || touch.l ? 1 : 0) - ((!free && (k.ArrowRight || k.KeyD)) || touch.r ? 1 : 0);
   hb = !!(k.Space || touch.hb);
   try {
     const gps = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -2821,7 +2822,8 @@ function readInput() {
 function readFreeMove() {
   if (view.cam !== FREECAM) return null;
   const k = keys;
-  return { fwd: (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0), strafe: (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0), up: (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0) };
+  return { fwd: (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0), strafe: (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0), up: (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0),
+    yaw: (k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0), pitch: (k.ArrowUp ? 1 : 0) - (k.ArrowDown ? 1 : 0) };
 }
 
 /* ---------------- toggles & setup ---------------- */
@@ -3171,7 +3173,7 @@ function drawReplayHUD(f) {
   ctx.textAlign = 'center'; ctx.fillStyle = f.gear < 0 ? '#e5533d' : '#7fc8a0'; ctx.font = '700 52px ' + F;
   ctx.fillText(f.gear < 0 ? 'R' : String(f.gear), W - 44, H - 46);
   ctx.fillStyle = '#9aa7b0'; ctx.font = '600 12px ' + F; ctx.fillText('GEAR', W - 44, H - 28);
-  if (view.cam === FREECAM) { ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(10,14,17,0.55)'; rr(10, H - 54, 236, 34, 8); ctx.fill(); ctx.fillStyle = '#f1ede2'; ctx.font = '600 13px ' + F; ctx.fillText('WASD move · E / Q height', 22, H - 32); }
+  if (view.cam === FREECAM) { ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(10,14,17,0.55)'; rr(10, H - 54, 330, 34, 8); ctx.fill(); ctx.fillStyle = '#f1ede2'; ctx.font = '600 13px ' + F; ctx.fillText('WASD move · E / Q height · Arrows look', 22, H - 32); }
 }
 function chipCol(t) {
   if (t.kind === 'corner') return t.sev <= 1 ? '#d9483a' : t.sev <= 3 ? '#e0a93a' : '#5fae86';
@@ -3250,12 +3252,13 @@ function enterReplay() {
   preReplay = { wasHidden: ovl.hidden, title: $('ovTitle').textContent, body: $('ovBody').textContent, btnHidden: $('ovBtn').hidden, btnText: $('ovBtn').textContent, action: ovAction, paused: sim.paused };
   RP.playing = true; RP.dir = 1; RP.speed = 1; RP.t = 0; RP.idx = 0;
   $('rpScrub').max = String(rec.n - 1); $('rpScrub').value = '0';
-  closeSettings(); CO.cancel(); setMode('replay'); syncReplayUI();
+  closeSettings(); CO.cancel(); setMode('replay'); hideOverlay(); syncReplayUI();
   try { cv.focus(); } catch (e) {}
 }
 function exitReplay() {
   setMode('play');
   if (preReplay) { if (!preReplay.wasHidden) showOverlay(preReplay.title, preReplay.body, preReplay.btnHidden ? '' : preReplay.btnText, preReplay.action); sim.paused = preReplay.paused; preReplay = null; }
+  if (sim.finished && ovl.hidden) { const m = $('ovTitle').textContent; if (/^Finish/.test(m)) showOverlay(m, $('ovBody').textContent, 'Run again', null); }
   syncToggles();
 }
 $('hbReplay').addEventListener('click', enterReplay);
@@ -3528,7 +3531,7 @@ function buildGS(tab, m) {
   } else if (tab === 'camera') {
     const c = view.cam, a = prefs.cams[c], R = CAM_RNG[c], inMenu = mode === 'menu', free = c === FREECAM;
     const side = (v, neg, pos) => Math.abs(v) < 0.005 ? 'centre' : Math.abs(v).toFixed(2) + ' m ' + (v < 0 ? neg : pos);
-    m.append(gsHead('View'), gsRow('Camera view', inMenu ? 'Start a stage to preview changes live' : free ? 'Fly free with WASD, E / Q for height' : 'Changes apply instantly', gsSeg(CAM_NAMES.map((n, i) => [i, n]), () => view.cam, v => { view.cam = v; syncToggles(); renderGS(); })),
+    m.append(gsHead('View'), gsRow('Camera view', inMenu ? 'Start a stage to preview changes live' : free ? 'Fly with WASD, E / Q height, arrow keys to look' : 'Changes apply instantly', gsSeg(CAM_NAMES.map((n, i) => [i, n]), () => view.cam, v => { view.cam = v; syncToggles(); renderGS(); })),
       gsHead(CAM_NAMES[c] + ' camera'),
       gsRow('Field of view', null, gsSlider(R.fov[0], R.fov[1], 1, () => a.fov, v => { a.fov = v; savePrefs(); }, v => v + '°')));
     if (free) {
@@ -3810,7 +3813,7 @@ function boot() {
 }
 boot();
 window.__rally = { car, sim, get stage() { return stage; }, tick, render, drawTele, GL, view, get notes() { return notes; }, aud, CO,
-  rec, RP, get mode() { return mode; }, enterReplay, exitReplay, get replayCar() { return replayCar; } };
+  rec, RP, sim, finishStage, startStage, get mode() { return mode; }, enterReplay, exitReplay, get replayCar() { return replayCar; } };
 })();
 
 </script>
